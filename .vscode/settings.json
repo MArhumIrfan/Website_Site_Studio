@@ -1,0 +1,10 @@
+{
+  "java.configuration.runtimes": [],
+  "java.jdt.ls.java.home": "",
+  "java.import.maven.enabled": false,
+  "java.import.gradle.enabled": false,
+  "java.autobuild.enabled": false,
+  "files.associations": {
+    "*.html": "html"
+  }
+}
