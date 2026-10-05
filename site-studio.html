@@ -326,6 +326,7 @@ if(SHOW_EDITOR){
    STATE & HELPERS
    ══════════════════════════════════════════════════════════════════ */
 let src='',cfg=null,PRES={},hist=[],hi=-1,opened=new Set(),frLoaded=false,tm;
+const STORAGE_VERSION = 'v2';
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clone=o=>JSON.parse(JSON.stringify(o));
@@ -370,15 +371,35 @@ function extractBlock(js, startMarker, endMarker){
   return js.slice(start,i);
 }
 function parse(text){
-  const scripts=[...text.matchAll(new RegExp(TAG_OPEN+'([\\s\\S]*?)'+LT+'\\/script>','g'))].map(m=>m[1]);
+  function findFunction(src, name){
+  const idx = src.indexOf('function ' + name);
+  if (idx < 0) return null;
+  const braceStart = src.indexOf('{', idx);
+  if (braceStart < 0) return null;
+  let depth = 0, i = braceStart, inStr = false, strCh = '', esc2 = false;
+  for (; i < src.length; i++) {
+    const c = src[i];
+    if (inStr) {
+      if (esc2) { esc2 = false; continue; }
+      if (c === '\\') { esc2 = true; continue; }
+      if (c === strCh) inStr = false;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inStr = true; strCh = c; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) return src.slice(idx, i + 1); }
+  }
+  return null;
+}
+  const scripts=[...text.matchAll(/<script>([\s\S]*?)<\\?\/script>/g)].map(m=>m[1]);
   const js=scripts.find(x=>x.includes('const CAFE')&&x.includes('const PRESETS'));
   if(!js)throw new Error('This is not the modular template (or an export of it). Missing CAFE/PRESETS.');
   const cafeBlock=extractBlock(js,'const CAFE');
   const presetsBlock=extractBlock(js,'const PRESETS');
   if(!cafeBlock||!presetsBlock)throw new Error('Could not find CAFE or PRESETS in the template.');
-  const mm=js.match(/function merge\(a,b\)\{[\s\S]*?\n\}/);
-  if(!mm)throw new Error('Could not find the merge() function.');
-  const code=mm[0]+';\n'+cafeBlock+';\n'+presetsBlock+';\nreturn {CAFE,PRESETS};';
+  const mm = findFunction(js, 'merge');
+  if(!mm) throw new Error('Could not find the merge() function.');
+  const code=mm+';\n'+cafeBlock+';\n'+presetsBlock+';\nreturn {CAFE,PRESETS};';
   let result;
   try{result=new Function(code)()}catch(e){throw new Error('Template config is invalid: '+e.message)}
   const ex=text.match(new RegExp('(?:^|'+TAG_OPEN+')const EXPORTED_CFG=(.*);\\n','m'));
@@ -605,26 +626,31 @@ addEventListener('beforeunload',e=>{if(cfg&&hi>0){e.preventDefault();e.returnVal
    BOOT — load default template if nothing saved
    ══════════════════════════════════════════════════════════════════ */
 (async function boot(){
-  // Always load the built-in default first so presets are guaranteed to be in the dropdown.
+  // Always load the built-in default first so presets are guaranteed.
   try{
     loadTemplate(DEFAULT_TEMPLATE);
   }catch(x){
     console.error('Failed to load default template:',x);
+    alert('Could not load the default template.\n\n'+x.message+'\n\nOpen the browser console (F12) for details.');
+    return;
   }
-  // Then try to restore a saved session — but only use a saved template if it parses cleanly AND has presets.
+
+  // Now try to overlay a saved session — but never let a broken template win.
   try{
-    const savedSrc = await idb.get('src');
+    const savedSrc = await idb.get(STORAGE_VERSION+'-src');
     if(savedSrc && savedSrc !== DEFAULT_TEMPLATE){
       try{
         const r = parse(savedSrc);
-        if(Object.keys(r.P).length > 0){
-          src = savedSrc; PRES = r.P;
+        if(r && Object.keys(r.P).length > 0){
+          src = savedSrc;
+          PRES = r.P;
           const keys = Object.keys(PRES);
           $('#preset').innerHTML = '<option value="">Load preset…</option>' + keys.map(k=>`<option>${esc(k)}</option>`).join('');
         }
-      }catch(x){ /* stale or invalid template — ignore */ }
+      }catch(e){ /* stale template — keep the built-in one */ }
     }
-    const savedCfg = await idb.get('cfg');
+
+    const savedCfg = await idb.get(STORAGE_VERSION+'-cfg');
     if(savedCfg){
       const c = JSON.parse(savedCfg);
       if(c && c.brand){
@@ -634,10 +660,11 @@ addEventListener('beforeunload',e=>{if(cfg&&hi>0){e.preventDefault();e.returnVal
         $('#fr').srcdoc = build(cfg);
       }
     }
-  }catch(x){}
-  // Show the welcome screen with preset cards on load
+  }catch(e){}
+
+  // Show the welcome screen with preset cards.
   $('#welcome').style.display = 'flex';
-  renderPresetCards();
+  if(typeof renderPresetCards === 'function') renderPresetCards();
 })();
 </script>
 </body>
